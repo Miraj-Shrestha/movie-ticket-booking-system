@@ -9,22 +9,8 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-// CORS — allow localhost in dev and the Vercel frontend in production
-const allowedOrigins = [
-    'http://localhost:5173',
-    'http://localhost:4173',
-    process.env.CLIENT_URL, // e.g. https://your-app.vercel.app
-].filter(Boolean);
-
-app.use(cors({
-    origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
-}));
+// CORS — open to all origins (suitable for a demo/portfolio app)
+app.use(cors());
 
 app.use(express.json());
 
