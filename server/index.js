@@ -1,7 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { open } from 'sqlite';
-import sqlite3 from 'sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -19,7 +18,6 @@ const allowedOrigins = [
 
 app.use(cors({
     origin: (origin, callback) => {
-        // allow requests with no origin (curl, Postman, same-origin)
         if (!origin || allowedOrigins.includes(origin)) {
             callback(null, true);
         } else {
@@ -35,37 +33,30 @@ const PORT = process.env.PORT || 5000;
 // Health-check (Render pings this to confirm the service is up)
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 
-// Database initialization
-let db;
-(async () => {
-    db = await open({
-        filename: path.join(__dirname, 'database.sqlite'),
-        driver: sqlite3.Database
-    });
+// ── Database initialization (node:sqlite — built into Node 22+, no install needed) ──
+const db = new DatabaseSync(path.join(__dirname, 'database.sqlite'));
 
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS seats (
-            id INTEGER PRIMARY KEY,
-            status TEXT DEFAULT 'available'
-        )
-    `);
+db.exec(`
+    CREATE TABLE IF NOT EXISTS seats (
+        id     INTEGER PRIMARY KEY,
+        status TEXT DEFAULT 'available'
+    )
+`);
 
-    // Initialize 20 seats if table is empty
-    const count = await db.get('SELECT COUNT(*) as count FROM seats');
-    if (count.count === 0) {
-        for (let i = 1; i <= 20; i++) {
-            await db.run('INSERT INTO seats (id) VALUES (?)', [i]);
-        }
-    }
-    console.log('✅ Database initialized with 20 seats.');
-})();
+// Initialize 20 seats if table is empty
+const count = db.prepare('SELECT COUNT(*) as count FROM seats').get();
+if (count.count === 0) {
+    const insert = db.prepare('INSERT INTO seats (id) VALUES (?)');
+    for (let i = 1; i <= 20; i++) insert.run(i);
+}
+console.log('✅ Database initialized with 20 seats.');
 
 // ── API Endpoints ──────────────────────────────────────────────
 
 // GET all seats
-app.get('/api/seats', async (req, res) => {
+app.get('/api/seats', (req, res) => {
     try {
-        const seats = await db.all('SELECT * FROM seats ORDER BY id');
+        const seats = db.prepare('SELECT * FROM seats ORDER BY id').all();
         res.json(seats);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -73,7 +64,7 @@ app.get('/api/seats', async (req, res) => {
 });
 
 // POST /api/book  — body: { seatIds: number[] }
-app.post('/api/book', async (req, res) => {
+app.post('/api/book', (req, res) => {
     const { seatIds } = req.body;
     if (!seatIds || !Array.isArray(seatIds) || seatIds.length === 0) {
         return res.status(400).json({ error: 'seatIds must be a non-empty array' });
@@ -81,19 +72,15 @@ app.post('/api/book', async (req, res) => {
 
     try {
         const placeholders = seatIds.map(() => '?').join(',');
-        const available = await db.all(
-            `SELECT * FROM seats WHERE id IN (${placeholders}) AND status = 'available'`,
-            seatIds
-        );
+        const available = db
+            .prepare(`SELECT * FROM seats WHERE id IN (${placeholders}) AND status = 'available'`)
+            .all(...seatIds);
 
         if (available.length !== seatIds.length) {
             return res.status(400).json({ error: 'Some seats are already booked or invalid' });
         }
 
-        await db.run(
-            `UPDATE seats SET status = 'booked' WHERE id IN (${placeholders})`,
-            seatIds
-        );
+        db.prepare(`UPDATE seats SET status = 'booked' WHERE id IN (${placeholders})`).run(...seatIds);
         res.json({ message: 'Seats booked successfully', bookedSeats: seatIds });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -101,7 +88,7 @@ app.post('/api/book', async (req, res) => {
 });
 
 // POST /api/cancel  — body: { seatIds: number[] }
-app.post('/api/cancel', async (req, res) => {
+app.post('/api/cancel', (req, res) => {
     const { seatIds } = req.body;
     if (!seatIds || !Array.isArray(seatIds) || seatIds.length === 0) {
         return res.status(400).json({ error: 'seatIds must be a non-empty array' });
@@ -109,10 +96,7 @@ app.post('/api/cancel', async (req, res) => {
 
     try {
         const placeholders = seatIds.map(() => '?').join(',');
-        await db.run(
-            `UPDATE seats SET status = 'available' WHERE id IN (${placeholders})`,
-            seatIds
-        );
+        db.prepare(`UPDATE seats SET status = 'available' WHERE id IN (${placeholders})`).run(...seatIds);
         res.json({ message: 'Booking cancelled successfully', cancelledSeats: seatIds });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -122,4 +106,3 @@ app.post('/api/cancel', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
 });
-
